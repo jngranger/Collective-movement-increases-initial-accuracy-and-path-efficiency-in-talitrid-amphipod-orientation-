@@ -1,0 +1,525 @@
+---
+title: "Figures for Publication_Jesse"
+output: html_document
+date: "2024-01-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(circular)
+library(patchwork)
+library(lme4)
+library(viridis)
+```
+
+
+# Load Data and wrangle 
+
+```{r, message=FALSE}
+
+# This function makes sure all circular values are coded as circular, and run as -pi to pi
+wranglecircular=function(Angles){
+  Angles = as.circular(Angles, type="angles",units="radians",
+                                                template="none",modulo="asis",
+                                                zero=0,rotation="counter")
+  Angles=(Angles+(2*pi))%%(2*pi)
+  Angles=if_else(Angles<pi,Angles,Angles-(2*pi))
+  
+  Angles
+}
+
+
+# Load The Trial Summary Data
+## Colmuns:
+  ## GS = The group size
+  ## Trial = The trial number (the NA for GS 1 is Trial 14)
+  ## Center_X/Y = The x,y coordinates of the center of the pan
+  ## Beach_X/Y = The x,y coordinates of the spot on the edge of the pan closest to the beach/wrackline
+  ## AngleBeach = The angle between the center of the pan and the beach
+  ## Date = Date of the trial in Year-Month-Day.
+  ## Weather = A qualitative descriptor of the weather
+  ## Temp = Temperature at the start of the trial in Fahrenheit
+  ## hour/minutes = The hour and minute of the day when the trial began in 24hr
+  ## Dig = The name of the person who digitized the trial
+  ## Dist_Actual = The sum of the distance traveled between each step (cm)
+  ## Dist_StrtLine = The beeline distance between their starting and ending coordinates (cm)
+  ## Sinuosity = Dist_StrtLine/Dist/Actual. Not an accurate measurement of path wiggliness b/c of non-standard steplengths
+  ## Time = The total number of seconds between when the animal started moving to when they finished the trial
+  ## FinalPosition = The angle between where the animal ended the trial and the center of the arena relative to the wrackline. Renamed to Final Orientation
+  ## HeadingMean = The circular mean of each heading, weighted by the distance traveled relative to the wrackline
+  ## StartHeading = The bearing of their first step, relative to the wrackline. Renamed to InitialBearing
+  ## Velocity = Dist_Actual / Time in cm per s
+  ## Start_X/Y = Their starting X,Y location in the original coordinate system
+  ## Start_X/Y.T = Their starting X,Y location transformed to a new coordinate system where the center of the pan is at 0,0, and the angle between the center of the pan and the beach is = 0 (rotated such that the beach is always to the right of all figures)
+  ## StartLocation = Their angle between where the animal started the trial and the center of the arena relative to the wrackline. Not equivalent to StartHeading which is the angle between their first and second step. Renamed to InitialOrientation
+  ## End_X/Y = Their final X,Y location in the original coordinate system
+  ## Latency = The time between when the trial started (the cup was lifted) and when the animal began moving in s. This time is not included in their total time
+  ## Animal = a designator for which animal was being digitized within each trial
+  ## Dist_Diff = Dist_Actual-Dist_StrtLine. Renamed to ExcessDist
+  ## TOD = Time of Day at the beginning of the trial
+  ## Smoky = A designator for the days during which there was a nearby forest fire
+  ## Year = The year the trial was conducted
+  ## Latency2 = log(Latency), used for fig S7
+  ## GS.Trial = GS and Trial combined. Used for MEM's
+  ## FinalPosition_pan = The angle between where the animal ended the trial and the center of the arena relative to the arena. Renamed to FinalOrientation_pan
+  ## FinalPosition/StartHeading.L = A linearized version of the Final position and Start Heading. Renamed to InitialBearing.L and FinalOrientation.L
+  
+GSall.alltrials.Outlier=read.csv("GSall.csv") |> 
+  mutate(
+    AngleBeach=wranglecircular(AngleBeach),
+    FinalOrientation=wranglecircular(FinalPosition),
+    HeadingMean=wranglecircular(HeadingMean),
+    InitialBearing=wranglecircular(StartHeading),
+    InitialOrientation=wranglecircular(StartLocation),
+    FinalOrientation.Pan=wranglecircular(FinalPosition.Pan)
+    
+    ) |> 
+  rename(InitialBearing.L=StartHeading.L,
+         FinalOrientation.L=FinalPosition.L,
+         ExcessDist=Dist_Diff)
+
+# Remove outliers
+GSall.alltrials=GSall.alltrials.Outlier |> 
+  filter(Time<18)
+
+# A df where MRV is calculated for each trial (unable to be calculated for GS1 as there was only one animal). Used for MEM's.
+GSall.alltrials.mrv=GSall.alltrials |> 
+  group_by(GS, Trial, GS.Trial, Weather, Temp, TOD, Smoky, Year) |> 
+  summarise(FinalMRV = rho.circular(FinalOrientation), InitialMRV = rho.circular(InitialBearing)) |> 
+  filter(GS != 1) 
+
+
+
+# Load the Full Track Data
+## Columns: 
+    ## X/Y = x,y of each step in the original coordinate system from the moment the animal starts moving till the trial ends
+    ## Center_X/Y (changed to X/Y.Centered) = x,y of each step rel. to CENTER OF ARENA (in this coordinate system, center=0,0 but the beach is still AngleBeach)
+    ## Dist_Center = distance between each step to CENTER OF ARENA (calculated after centering each x,y)
+    ## AngleCenter = angle between each step and CENTER OF ARENA (calculated after centering each x,y)
+    ## MinPrev_X/Y = x,y of each step rel. to PREVIOUS STEP (calculated on the original x,y)
+    ## Dist_Each = distance between EACH STEP (calculated on the original x,y)
+    ## AngleCenter_Transformed = angle between each step and CENTER OF ARENA, transformed such that 0=beach (calculated as AngleCenter - AngleBeach)
+    ## X/Y.Transformed = new x,y locations transfored (in this coordinate system, center=0,0 and the angle towards the beach is = 0. Calculated as Dist_Center*cos or sin of AngleCenter_Transformed)
+    ## Heading = the individuals actual bearing, relative to the beach. 0 = towards the beach (calculated using X/Y.Transformed)
+    ## Time = frame of that particular step
+
+GSall.tracks=read.csv("GSalltracks.csv") |> 
+  mutate(
+    Heading=wranglecircular(Heading),
+    AngleCenter_Transformed=wranglecircular(AngleCenter_Transformed)
+  )
+   
+
+# Load the Boostrapped Data
+
+GS1.5=read.csv("Bootstrapped Underlying Dist for GS5.csv") |> 
+  mutate(
+    InitialBearing=wranglecircular(StartHeading),
+    FinalOrientation=wranglecircular(FinalPosition),
+    InitialOrientation=wranglecircular(StartPosition)
+  ) |> 
+  rename(InitialMRV="rho_StartHeading",
+         FinalMRV="rho_FinalPosition",
+         ExcessDist="Dist_Diff")
+GS1.10=read.csv("Bootstrapped Underlying Dist for GS10.csv") |> 
+   mutate(
+    InitialBearing=wranglecircular(StartHeading),
+    FinalOrientation=wranglecircular(FinalPosition),
+    InitialOrientation=wranglecircular(StartPosition)
+  ) |> 
+  rename(InitialMRV="rho_StartHeading",
+         FinalMRV="rho_FinalPosition",
+         ExcessDist="Dist_Diff")
+df.GS1.mean=read.csv("Averaged GS1 Values.csv") |> 
+  mutate(
+    InitialBearing=wranglecircular(StartHeading),
+    FinalOrientation=wranglecircular(FinalPosition),
+    InitialOrientation=wranglecircular(StartPosition)
+  ) |> 
+  rename(InitialMRV="rho_StartHeading",
+         FinalMRV="rho_FinalPosition",
+         ExcessDist="Dist_Diff")
+```
+
+
+
+# Main Text Figures
+
+## Figure 1: Final Headings with respect to both the wrack line and the pan
+
+```{r}
+source("Circular Plots Function.R")
+p1=circularplot("FinalOrientation", xlab="Final Orientation Rel. Beach",R = 200)+labs(tag="A")
+p2=circularplot("FinalOrientation.Pan", xlab="Final Orientation Rel. Arena",R = 200)+labs(tag="B")
+
+p1|p2
+```
+```{r}
+GSall.alltrials |>
+    #Filter to the data we want
+    filter(Weather=="Sunny", Smoky=="Not Smoky", Time<18) |> 
+    rename(Variable=FinalOrientation) |> 
+    group_by(GS.Trial) |> 
+    summarise(Variable=mean.circular(Variable)) |> 
+  mutate(
+      Variable=(Variable+(2*pi))%%(2*pi),
+      Variable=if_else(Variable<pi,Variable,Variable-(2*pi))
+    ) |> 
+  ungroup() |> 
+  summarise(MeanHeading=mean.circular(Variable),
+              Rho=rho.circular(Variable),
+              pvalue=round(rayleigh.test(Variable)$p.value,3),
+              CI1=mle.vonmises.bootstrap.ci(Variable)$mu.ci[1],
+              CI2=mle.vonmises.bootstrap.ci(Variable)$mu.ci[2],
+            FO.CI=mean.circular(abs(MeanHeading-CI1),abs(MeanHeading-CI2) )
+    ) |> 
+  mutate(MeanHeading=MeanHeading*(180/pi),
+         FO.CI=FO.CI*(180/pi))
+```
+
+
+
+## Figure 2: The Starting Location of all animals, faceted by if they were released individually or in a group
+
+```{r, fig.height=3, fig.width=7}
+R=400
+(p=GSall.alltrials |> 
+  filter(Weather=="Sunny", Smoky=="Not Smoky",Time<18) |> 
+  # mutate(GS=recode(GS,"1"="GS1", "5"="GS5","10"="GS10")) |> #Option to facet by GS
+   mutate(GS=recode(GS,"1"="Individuals", "5"="Grouped","10"="Grouped"),
+          GS=factor(GS,levels = c("Individuals","Grouped"))) |>
+  ggplot()+
+    theme_classic(base_size = 20)+
+    theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(),axis.line = element_blank(),
+          legend.position = "none")+
+    geom_point(aes(Start_X.T,Start_Y.T,   size=GS), color="#3B528BFF",alpha=0.4) + 
+ #Outer circle. R=400 which is approximately the diameter of the acclimation cup in pixels
+    annotate("path",
+     x=R*cos(seq(0,2*pi,length.out=100)),
+     y=R*sin(seq(0,2*pi,length.out=100)))+
+    #Colors
+    #Facet
+    facet_wrap(~GS)+
+    # #Add arrowheads in the direction of the wrackline
+    annotate(geom="segment",x=0+as.numeric(R*cos(0)),
+                      y=0+as.numeric(R*sin(0)),
+                     xend=0+as.numeric((R+50)*cos(0)),
+                     yend=0+as.numeric((R+50)*sin(0)),
+                    col="darkblue",
+                    arrow = arrow(length = unit(0.15, "inches"), type="closed"),
+                    linewidth=1)+
+  #center point
+    annotate(geom="point", x=0,y=0, size=2)+ 
+  #Make sure the outer circle is circular
+    coord_fixed()+
+  scale_size_manual(values = c("Individuals"=4,"Grouped"=3))
+)
+```
+
+## Table 2: The mean and sd for each movement variable for each group size
+
+```{r}
+
+(Table2= GSall.alltrials |> filter(Time<18, Weather=="Sunny", Smoky=="Not Smoky") |> 
+  group_by(GS) |> 
+    mutate(GS=recode(GS,"1"="GS1","5"="GS5", "10"="GS10"))|> 
+       mutate(GS=factor(GS,levels=c("GS1","GS5","GS10"))) |> 
+  summarise(
+    Latency.mean=mean(Latency),Latency.sd=sd(Latency),
+    Time.mean=mean(Time),Time.sd=sd(Time),
+    Speed.mean=mean(Velocity),Speed.sd=sd(Velocity),
+    ExcessDist.mean=mean(ExcessDist),ExcessDist.sd=sd(ExcessDist),
+    InitialBearing.mean=mean.circular(InitialBearing),
+    IB.sd=sd.circular(InitialBearing),
+    FinalOrientation.mean=mean.circular(FinalOrientation), 
+    FO.sd=sd.circular(FinalOrientation) ) |> 
+ mutate(
+   InitialBearing.mean=(InitialBearing.mean)*(180/pi),
+   FinalOrientation.mean=FinalOrientation.mean*(180/pi),
+   IB.sd=(IB.sd)*(180/pi),
+   FO.sd=(FO.sd)*(180/pi),
+ ) |> 
+  mutate(InitialMRV=c(df.GS1.mean$InitialMRV,mean(GS1.5$InitialMRV),mean(GS1.10$InitialMRV))) |>   
+  mutate(FinalMRV=c(df.GS1.mean$FinalMRV,mean(GS1.5$FinalMRV),mean(GS1.10$FinalMRV)))|>
+  mutate(across(2:13, \(x) round(x, 1))) |> 
+  mutate(across(14:15, \(x) round(x, 2))) |> 
+  ungroup() |> 
+  reframe(GS=GS,
+          "Latency (s)"=paste0(Latency.mean," ± ",Latency.sd),
+          "Time (s)"=paste0(Time.mean," ± ",Time.sd),
+          "Speed (cm/s)"=paste0(Speed.mean," ± ",Speed.sd),
+          "Excess Dist (cm)"=paste0(ExcessDist.mean," ± ",ExcessDist.sd),
+          "Initial Bearing (deg.)"=paste0(InitialBearing.mean," ± ",IB.sd),
+          "Initial MRV"=as.character(InitialMRV),
+          "Final Orientation (deg.)"=paste0(FinalOrientation.mean," ± ",FO.sd),
+          "Final MRV"=as.character(FinalMRV)
+          ) |> 
+  pivot_longer(cols=-GS, names_to="Metrics") |> 
+  pivot_wider(names_from="GS", values_from="value")
+)
+
+
+GSall.alltrials |> filter(Time<18, Weather=="Sunny", Smoky=="Not Smoky") |> 
+  group_by(GS) |> 
+    mutate(GS=recode(GS,"1"="GS1","5"="GS5", "10"="GS10"))|> 
+       mutate(GS=factor(GS,levels=c("GS1","GS5","GS10"))) |> 
+  summarise(
+    Latency.mean=mean(Latency),
+    Time.mean=mean(Time),
+    Speed.mean=mean(Velocity),
+    ExcessDist.mean=mean(ExcessDist),
+    InitialBearing.mean=mean.circular(InitialBearing),
+    FinalOrientation.mean=mean.circular(FinalOrientation)
+    ) |> 
+ mutate(
+   InitialBearing.mean=as.numeric((InitialBearing.mean)*(180/pi)),
+   FinalOrientation.mean=as.numeric(FinalOrientation.mean*(180/pi) )) |> 
+  mutate(InitialMRV=c(df.GS1.mean$InitialMRV,mean(GS1.5$InitialMRV),mean(GS1.10$InitialMRV))) |>   
+  mutate(FinalMRV=c(df.GS1.mean$FinalMRV,mean(GS1.5$FinalMRV),mean(GS1.10$FinalMRV)))|>
+  mutate(across(2:7, \(x) round(x, 1))) |> 
+  mutate(across(8:9, \(x) round(x, 2))) |> 
+  ungroup() |> 
+  pivot_longer(cols=-GS, names_to="Metrics") |> 
+  pivot_wider(names_from="GS", values_from="value")|> 
+  mutate(diff10=GS10-GS1)
+```
+
+## Figure 3: Violin plots of raw data with p-values from bootstrap analysis for GS1 compared to GS10
+
+```{r,message=F,fig.width=9, fig.height=8}
+#load functions to make the plots for the linear and circualr variables
+source("Violin Plots with Bootstrap pvalue.R")
+source("Circular Violin Plots with Bootstrap pvalue.R")
+#Make the plots
+VL=violinplot("Latency","Latency (s)")
+VV=violinplot("Velocity","Speed (cm/s)")
+VD=violinplot("ExcessDist",ylab="Excess Dist (cm)")
+VT=violinplot("Time","Time (s)")
+CS=circular.violin.plot("InitialBearing","InitialMRV",ylab = "Initial Bearing")
+CF=circular.violin.plot("FinalOrientation","FinalMRV", ylab = "Final Orientation")
+#put them together (note, Speed for some reason wasn't putting 0 on the y axis so we had to add breaks manually here)
+VL+VT+(VV+scale_y_continuous(breaks = c(0,10,20,30), limits=c(0,30)))+VD+CS+CF+plot_layout(ncol=2, nrow=3,heights=c(6,6,6), widths=c(8,8))
+```
+
+
+
+# Supplemental Information Figures and Analyses
+
+## Supplemental Figure S2: Example of Digitized Tracks
+
+```{r,fig.width=6, fig.height=5}
+GSall.tracks |> 
+  #select one trial
+  filter(GS==5, GS.Trial=="5.9") |> 
+  mutate(Animal=as.factor(Animal)) |> 
+  ggplot()+
+    theme_classic()+
+    theme(axis.title = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.line = element_blank())+
+  
+  #Make the outer circle. R=930 which is approximately the radius of the pan in pixels
+    annotate("path",
+     x=930*cos(seq(0,2*pi,length.out=100)),
+     y=930*sin(seq(0,2*pi,length.out=100)))+
+  #Add an arrow pointing towards the beach
+    annotate(geom="segment",x=0,y=0,
+                   xend=0+as.numeric(930*cos(0)),
+                   yend=0+as.numeric(930*sin(0)),
+                  arrow = arrow(length = unit(0.5, "cm")),size=1)+
+  #Add the paths for each animal
+    geom_path(aes(X.Transformed,Y.Transformed,color=Animal, group=Animal), linewidth=1.5)+
+  #Add center point
+    annotate(geom="point",x=0,y=0, size=2)+
+  #colors
+    scale_color_viridis(discrete = T)+
+  #lock coordinates to maintain circle shape
+    coord_fixed()
+```
+
+## Supplemental Figure S3: Identifying the Outliers
+
+Here we identify the outliers by using a z-score on the time variable, and filtering anything less than or equal to a z-score of 3.29
+
+```{r}
+#Using z-scores. z=(x_i - mean(x))/sd(x). Anything above 3.29 is considered an outlier
+GSall.alltrials.Outlier$z_Time=as.numeric(scale(GSall.alltrials.Outlier$Time))
+b=min(filter(GSall.alltrials.Outlier,z_Time>=3.29)$Time) #approximately Time=18s
+
+#Outliers are classified as Time >=18s
+GSall.alltrials.Outlier |> 
+  filter(Weather=="Sunny", Smoky=="Not Smoky") |> 
+  filter(Time>=18) |> 
+  select(GS, Trial, Animal, Time, z_Time)
+```
+
+Plot the Outliers
+ 
+```{r, fig.width=12, fig.height=5, message=F}
+GSall.alltrials.Outlier |>
+  filter(Weather=="Sunny", Smoky=="Not Smoky") |> 
+  ggplot()+
+  theme_classic(base_size = 20)+
+  geom_point(aes(Time,Dist_Actual,color=Velocity),alpha=0.5,size=3.5)+
+  geom_smooth(aes(Time,Dist_Actual,group=GS),method = "lm")+
+  scale_color_viridis(option="turbo", limits=c(0,17))+
+  labs(y="Actual Dist (cm)",
+       x="Time (s)", 
+       color="Speed (cm/s)",
+       )+
+  theme(plot.subtitle = element_text(size=14))+
+  geom_vline(xintercept = 18, linetype="dashed")+
+  facet_wrap(~GS, labeller = "label_both")
+```
+
+
+## Supplemental Figure S5: The histogram plots from the bootstrap analysis withh associated p-values for all movement variables for GS5 and GS10
+
+Make the plots
+
+```{r, fig.width=10, fig.height=10}
+#load functions to make the plots for the linear and circualr variables
+source("Bootstrap Histogram Plot Function.R")
+source("Circular Bootstrap Histogram Plot Function.R")
+
+# make the plots
+L5=bootstrap.histogram.plot("Latency","GS5", bins=70,maxy = 0.15, title="", xaxis = "Latency (s)")+scale_x_continuous(breaks = c(0,5,10))#+theme(plot.title = element_text(hjust=1.5))
+L10=bootstrap.histogram.plot("Latency","GS10", bins=60, maxy = 0.15,yaxis = F, title = "",xaxis = "Latency (s)")+scale_x_continuous(breaks = c(0,5,10))
+
+V5=bootstrap.histogram.plot("Velocity","GS5",maxy=0.15,yaxis = T, title="", xaxis = "Speed (cm/s)")
+V10=bootstrap.histogram.plot("Velocity","GS10",maxy=0.15,yaxis = F, title="", xaxis = "Speed (cm/s)")
+
+DD5=bootstrap.histogram.plot("ExcessDist","GS5", maxy=0.15, yaxis=F,title = "",xaxis = "Excess Dist (cm)")
+DD10=bootstrap.histogram.plot("ExcessDist","GS10",maxy=0.15,yaxis = F, title="",xaxis = "Excess Dist G(cm)")
+
+T5=bootstrap.histogram.plot("Time","GS5",  maxy=0.15, yaxis = F, title = "", xaxis = "Time (s)")
+T10=bootstrap.histogram.plot("Time","GS10", maxy=0.15, yaxis = F, title="",xaxis = "Time (s)")
+
+RF5=bootstrap.histogram.plot("FinalMRV","GS5",maxy=0.15,yaxis = T,title = "", xaxis = "Final MRV")
+RF10=bootstrap.histogram.plot("FinalMRV","GS10",maxy=0.15,yaxis = F, title = "", xaxis = "Final MRV")
+
+RS5=bootstrap.histogram.plot("InitialMRV","GS5",maxy=0.15,yaxis = F,title = "", xaxis="Initial MRV")
+RS10=bootstrap.histogram.plot("InitialMRV","GS10",maxy=0.15,yaxis = F, title="", xaxis="Initial MRV")
+
+SH5.C=bootstrap.histogram.plot.circular("InitialBearing", GS1.5,"#AF4E4E",title = "",xaxis="Initial Bearing",R=500)
+SH10.C=bootstrap.histogram.plot.circular("InitialBearing", GS1.10, "#FBAD4F",title = "",xaxis="Initial Bearing",R=500)
+
+F5.C=bootstrap.histogram.plot.circular("FinalOrientation", GS1.5,"#AF4E4E",R=500,title = "",xaxis="Final Orientation")
+F10.C=bootstrap.histogram.plot.circular("FinalOrientation", GS1.10, "#FBAD4F",R=500,title = "",xaxis="Final Orientation")
+
+p5=L5+T5+V5+DD5+RF5+RS5+F5.C+SH5.C+plot_layout(ncol=2,nrow=4, heights=c(5,5,5,5), widths=c(4,4))+plot_annotation(title="GS1 vs. GS5", theme=theme(plot.title = element_text(size = 15,hjust=0.5)))
+
+p10=L10+T10+V10+DD10+RF10+RS10+F10.C+SH10.C+plot_layout(ncol=2,nrow=4, heights=c(5,5,5,5), widths=c(4,4))+plot_annotation(title="GS1 vs. GS10", theme=theme(plot.title = element_text(size=15,hjust=0.5)))
+
+wrap_elements(p5) | wrap_elements(p10)
+```
+
+
+## Supplemental Figure S6: Violin plots of raw data with p-values from bootstrap analysis for GS1 compared to GS5
+
+```{r fig.width=9, fig.height=8}
+#load functions to make the plots for the linear and circualr variables
+source("Violin Plots with Bootstrap pvalue.R")
+source("Circular Violin Plots with Bootstrap pvalue.R")
+
+#make plots
+VL5=violinplot("Latency","Latency (s)",GS5 = T)
+VV5=violinplot("Velocity","Speed (cm/s)",GS5 = T)
+VD5=violinplot("ExcessDist","Excess Dist (cm)",GS5 = T)
+VT5=violinplot("Time","Time (s)",GS5 = T)
+CS5=circular.violin.plot("InitialBearing","InitialMRV",GS5 = T,ylab = "Initial Bearing")
+CF5=circular.violin.plot("FinalOrientation","FinalMRV",GS5 = T, ylab = "Final Orientation")
+#put them together
+VL5+VT5+VV5+VD5+CS5+CF5+plot_layout(ncol = 2,nrow = 3, heights=c(6,6,6), widths=c(8,8))
+```
+
+## Supplemental Figure S7: The histogram plots from the bootstrap analysis withh associated p-values for the initial orientation and straight-line distances for GS5 and GS10
+
+```{r,fig.height=5.5, fig.width=7}
+#load functions to make the plots for the linear and circular variables
+source("Bootstrap Histogram Plot Function.R")
+source("Circular Bootstrap Histogram Plot Function.R")
+
+#Make figures
+SP5=bootstrap.histogram.plot.circular("InitialOrientation",GS1.5,"#AF4E4E",title = "A1",xaxis="Initial Orientation GS5")
+SP10=bootstrap.histogram.plot.circular("InitialOrientation",GS1.10,"#FBAD4F",title = "A2",xaxis="Initial Orientation GS10")
+
+DS5=bootstrap.histogram.plot("Dist_StrtLine","GS5",maxy = 0.15,yaxis = T,title = "B1",xaxis = "Straight Line Dist. GS5 (cm)")
+DS10=bootstrap.histogram.plot("Dist_StrtLine","GS10",maxy = 0.15,yaxis = F, title="B2",xaxis = "Straight Line Dist. GS10 (cm)")
+
+#put them together
+SP5+SP10+DS5+DS10+plot_layout(ncol=2, nrow=2,heights = c(5,5),widths=c(4,4))
+```
+
+
+## Supplemental Table S2: Mixed Effect Model results for Cloud Cover and Year v.s. the eight movement variables of interest
+
+```{r, message=FALSE}
+#load function to make the MEM's
+source("Mixed Effect Model Function.R")
+
+# Cloud Cover
+CloudCover=new.lmer("Latency","Weather",randomeffects = 2)
+CloudCover=rbind(CloudCover, new.lmer("Time","Weather",randomeffects = 2))
+CloudCover=rbind(CloudCover, new.lmer("Velocity","Weather",randomeffects = 2))
+CloudCover=rbind(CloudCover, new.lmer("ExcessDist","Weather",randomeffects = 2))
+CloudCover=rbind(CloudCover, new.lmer("InitialBearing.L","Weather",randomeffects = 2))
+CloudCover=rbind(CloudCover, new.lmer("InitialMRV","Weather",randomeffects = 1,df = GSall.alltrials.mrv))
+CloudCover=rbind(CloudCover, new.lmer("FinalOrientation.L","Weather",randomeffects = 2))
+CloudCover=rbind(CloudCover, new.lmer("FinalMRV","Weather",randomeffects = 1,df = GSall.alltrials.mrv))
+
+
+
+
+
+#Year
+Year=new.lmer("Latency","Year",randomeffects = 3)
+Year=rbind(Year, new.lmer("Time","Year",randomeffects = 3))
+Year=rbind(Year, new.lmer("Velocity","Year",randomeffects = 3))
+Year=rbind(Year, new.lmer("ExcessDist","Year",randomeffects = 3))
+Year=rbind(Year, new.lmer("InitialBearing.L","Year",randomeffects = 3))
+Year=rbind(Year, new.lmer("InitialMRV","Year",randomeffects = 4, GSall.alltrials.mrv))
+Year=rbind(Year, new.lmer("FinalOrientation.L","Year",randomeffects = 3))
+Year=rbind(Year, new.lmer("FinalMRV","Year",randomeffects = 4, GSall.alltrials.mrv))
+
+
+
+#Bind together
+(TableS1=rbind(CloudCover, Year) |> 
+   relocate(Main.Effect,.before = Response) |> 
+   mutate(Estimate=round(Estimate,5),
+          Std.Error=round(Std.Error,5)) |> 
+    mutate(Response=recode(Response,"Velocity"="Speed"))
+ )
+```
+
+
+## Supplemental Figure S8: Cloud cover vs the eight movement variables of interest with associated p-values from the MEM's
+
+```{r,message=FALSE,fig.width=8, fig.height=5}
+#Note: the above chunk generating TableS2 must be run before this one
+
+#Load function to make plots
+source("Violin Plots of Weather.R")
+
+#make the plots
+W.L=environmentalplots("Latency2","Weather",pvalue=filter(TableS1,Response=="Latency",Main.Effect=="Weather")$SigCode,ylab =  "Log10 Latency (s)",no.x = T)
+W.V=environmentalplots("Velocity","Weather",pvalue=filter(TableS1,Response=="Speed",Main.Effect=="Weather")$SigCode, ylab = "Speed (cm/s)",no.x = T)
+W.D=environmentalplots("ExcessDist","Weather",ylab = "Excess Dist (cm)")
+W.T=environmentalplots("Time","Weather",ylab = "Time (s)")
+W.F=environmentalplots("FinalOrientation.L","Weather",ylab = "Final Orientation.L (rad)", no.x = F)
+W.S=environmentalplots("InitialBearing.L","Weather",ylab = "Initial Bearing.L (rad)",no.x = F)
+W.RF=environmentalplots("FinalMRV","Weather",df=GSall.alltrials.mrv, ylab="Final MRV", no.x = F)
+W.RS=environmentalplots("InitialMRV","Weather",df=GSall.alltrials.mrv,no.x = F, ylab="Initial MRV")
+
+#put them together
+( W.L | W.T | W.V | W.D) / ( W.S |W.RS |W.F | W.RF)
+```
+
+
+
+
+
+

@@ -1,0 +1,203 @@
+---
+title: "Load Wrangle and output tidy data"
+output: html_document
+date: "2024-02-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(zoo)
+library(circular)
+library(patchwork)
+source("Functions for GS1_Cleaned for Pub_V2.R")
+source("Functions for GS5_Cleaned for Pub_V2.R")
+source("Functions for GS10_Cleaned for Pub_V2.R")
+
+CI=function(df){
+  s=sd(df)
+  SE=s/sqrt(length(df))
+  1.95*SE
+}
+```
+
+```{r}
+#Load the Data
+
+DirectoryGS1.1 = paste0("C:/Users/Jesse/Dropbox (Duke Bio_Ea)/Jesse/Duke/Research/Navigation Orientation/SandHoppers/","/Digitized videos/GS1/First video/")
+
+
+temp.files.GS1 = list.files(path=DirectoryGS1.1, pattern=".csv")
+read.GS1=function(x){
+  read.csv(paste0(DirectoryGS1.1,x),na.strings = "NaN")
+}
+
+GS1=lapply(temp.files.GS1, read.GS1)
+
+df.GS1.tracks=data.frame()
+df.GS1.data=data.frame()
+
+for (i in 1:length(GS1)) {
+  df.tmp=sandhoppers.GS1.data(GS1[[i]])
+  df.GS1.data=rbind(df.GS1.data,df.tmp[[1]])
+  df.GS1.tracks=rbind(df.GS1.tracks,df.tmp[[2]])
+}
+
+################ GS5 ###################################
+DirectoryGS5.1 = paste0("C:/Users/Jesse/Dropbox (Duke Bio_Ea)/Jesse/Duke/Research/Navigation Orientation/SandHoppers","/Digitized videos/GS5/")
+
+temp.files.GS5 = list.files(path=DirectoryGS5.1, pattern=".csv")
+read.GS5=function(x){
+  read.csv(paste0(DirectoryGS5.1,x),na.strings = "NaN")
+}
+
+GS5=lapply(temp.files.GS5, read.GS5)
+
+df.GS5.tracks=data.frame()
+df.GS5.data=data.frame()
+
+for (i in 1:length(GS5)) {
+  df.tmp=sandhoppers.GS5.data(GS5[[i]])
+  df.GS5.data=rbind(df.GS5.data,df.tmp[[1]])
+  df.GS5.tracks=rbind(df.GS5.tracks,df.tmp[[2]])
+}
+
+################## GS 10 ###############
+DirectoryGS10.1 = paste0("C:/Users/Jesse/Dropbox (Duke Bio_Ea)/Jesse/Duke/Research/Navigation Orientation/SandHoppers","/Digitized videos/GS10/")
+
+temp.files.GS10 = list.files(path=DirectoryGS10.1, pattern=".csv")
+read.GS10=function(x){
+  read.csv(paste0(DirectoryGS10.1,x),na.strings = "NaN")
+}
+
+GS10=lapply(temp.files.GS10, read.GS10)
+
+
+ df.GS10.tracks=data.frame()
+ df.GS10.data=data.frame()
+
+for (i in 1:length(GS10)) {
+  df.tmp=sandhoppers.GS10.data(GS10[[i]])
+  df.GS10.data=rbind(df.GS10.data,df.tmp[[1]])
+  df.GS10.tracks=rbind(df.GS10.tracks,df.tmp[[2]])
+}
+
+```
+
+# Bind together trial summary data and wrangle 
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+ df.GS1=df.GS1.data %>% 
+  filter(Trial!="14") |> 
+  mutate(Animal=rep(1))
+
+
+#One warning about NAs is because GS5T1 has no Temp
+#The other warning about 'expecting 2 pieces' is for the separate. Don't worry about it.
+
+
+GSall=rbind(df.GS1,df.GS5.data,df.GS10.data) |> 
+    # Putting Dist and Velocity in correct units
+  mutate(Dist_Actual=Dist_Actual*((27/1860)), #pixels to cm
+         Dist_StrtLine=Dist_StrtLine*(27/1860), #pixels to cm
+         Time=Time/30) |> # frames to s
+  #recalculate velocity in correct units
+  mutate(Velocity=(Dist_Actual/(Time))) |> 
+  
+  #Calculating Dist_Diff as actual-strtline
+  mutate(Dist_Diff=Dist_Actual-Dist_StrtLine) |> 
+  
+  #wrangling the date and time of day columns into tidy format
+  mutate(Date=gsub('\\.', '/', Date)) %>%  #replace the deliminator . with / for all dates
+  mutate(Date=mdy(Date)) |>  #coerce date into a date-time object
+  mutate(TOD=gsub(' a.m.|am|pms| AM','',TOD)) |> #remove all text at the end of the TOD column
+  mutate(TOD=gsub('\\.', ':', TOD)) %>% #replace the deliminator . with : for all TOD
+  tidyr::separate(TOD,into=c("hour","minutes"),sep =c(":")) %>%  #separate into hours and minutes using : as the deliminator
+  
+  #Set these columns as numeric
+  mutate_at(c("Trial", "Temp", "hour", "minutes"), as.numeric) %>%
+  
+  #Getting TOD into an hour-min-second type object
+  mutate(hour=replace(hour,hour==1,13)) |> #replace 1pm with 13
+  mutate(TOD = hms(hour = hour, min = minutes)) |> #make TOD a time object
+
+  #make a column "smoky' where all dates on which the forest fire occurred are 'smoky' and other dates are 'not smoky'
+  mutate(Smoky=rep("Not Smoky"),
+         Smoky=replace(Smoky,Date=="2021-08-14"|Date=="2021-08-15"|Date=="2021-08-16"|Date=="2021-08-17","Smoky")) %>% 
+  
+  
+  #make weather a binary of either cloudy or sunny, and replace all smoky days with cloudy
+  mutate(Weather=replace(Weather,Date=="2021-08-14"|Date=="2021-08-15"|Date=="2021-08-16"|Date=="2021-08-17","Cloudy")) |> 
+  mutate(Weather=replace(Weather,Weather=="Slightly Cloudy","Sunny")) %>% 
+  
+  #set these columns as factors
+  mutate(Year=as.factor(year(Date))) |> 
+  mutate(GS = as.factor(GS)) |> 
+  mutate(Weather=as.factor(Weather)) |> 
+  
+  #Latency
+  mutate(Latency = Latency/30) %>% #Latency in seconds instead of frames
+  mutate(Latency2=log(Latency+(1/30))) |> #A new column that allows us to make the plots for fig S7 where we use log(latency) so that there isn't weird issues from the GS1 being so much larger. Add one frame so that we don't end up with a log(0)=-Inf error
+  
+  #We need this column for the MEM's
+  mutate(GS.Trial = paste0(GS, ".", Trial)) |> 
+ 
+  #Final Heading with respect to the pan
+    mutate(FinalHeading.Pan=atan2((End_Y-Center_Y),(End_X-Center_X))) |> 
+  
+  #Final and start Heading as a linear variable for MEM's and figure SX
+  ungroup() |> 
+  mutate(
+         #Mean-center Final and Start Heading. This allows us to say that the mean direction of the group was the "most correct" direction. Otherwise we could say that 0 (towards the wrack line) is the "most correct," however, animals showed a clear left-ward bias which likely indicates this is a more preferable direction (perhaps to maximize their time in the shadier part of the pan), so we will use this as the "most correct".
+         FinalHeading.L=FinalHeading-mean.circular(FinalHeading),
+         StartHeading.L=StartHeading-mean.circular(StartHeading),
+         #For both Final and Start, make sure to eliminate situations where we have numbers >2pi or <-2pi, then rotate to -pi to pi where 0 indicates the mean of the group.
+         FinalHeading.L=(FinalHeading.L+(2*pi))%%(2*pi),
+         FinalHeading.L=if_else(FinalHeading.L<pi,FinalHeading.L,FinalHeading.L-(2*pi)),
+         StartHeading.L=(StartHeading.L+(2*pi))%%(2*pi),
+         StartHeading.L=if_else(StartHeading.L<pi,StartHeading.L,StartHeading.L-(2*pi)),
+         #Turn into a numeric variable by taking the absolute value. Now 0 indicates most correct and pi indicates most incorrect
+         FinalHeading.L=abs(as.numeric(FinalHeading.L)),
+         StartHeading.L=abs(as.numeric(StartHeading.L))
+         ) |> 
+  rename(FinalPosition=FinalHeading,
+         FinalPosition.Pan=FinalHeading.Pan,
+         FinalPosition.L=FinalHeading.L)
+```
+
+
+#Bind together full track data and bind with summary
+
+```{r}
+df.GS1.tracks=df.GS1.tracks %>% 
+  mutate(Animal=rep(1),
+         GS=rep(1))
+
+df.GS5.tracks=df.GS5.tracks %>% 
+  mutate(GS=rep(5))
+
+df.GS10.tracks=df.GS10.tracks %>% 
+  mutate(GS=rep(10))
+
+GSalltracks=rbind(df.GS1.tracks,df.GS5.tracks,df.GS10.tracks) |> 
+  mutate(GS=as.factor(GS), Trial=as.double(Trial)) %>% #make these columns the same type as GSall.alltrials for joining
+  #rename columns so that there aren't repeat names after joining
+  rename(Frame=Time,
+         X.Centered=Center_X,
+         Y.Centered=Center_Y) |> 
+  #join with GSall
+  left_join(GSall,by=c("GS","Trial","Animal"))
+```
+
+
+
+
+
+
+```{r}
+
+write_csv(GSall,file="GSall.csv")
+
+write_csv(GSalltracks,file="GSalltracks.csv")
+```
+
+

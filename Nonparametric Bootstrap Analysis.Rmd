@@ -1,0 +1,128 @@
+---
+title: "Nonparamteric Bootstrap Analysis"
+output: html_document
+date: "2024-05-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(circular)
+```
+
+
+# Load Data and wrangle 
+
+```{r, message=FALSE}
+
+#This function makes sure all circular values are coded as circular, and run as -pi to pi
+wranglecircular=function(Angles){
+  Angles = as.circular(Angles, type="angles",units="radians",
+                                                template="none",modulo="asis",
+                                                zero=0,rotation="counter")
+  Angles=(Angles+(2*pi))%%(2*pi)
+  Angles=if_else(Angles<pi,Angles,Angles-(2*pi))
+  
+  Angles
+}
+
+  
+GSall.alltrials=read.csv("GSall.csv") |> 
+  mutate(
+    AngleBeach=wranglecircular(AngleBeach),
+    FinalPosition=wranglecircular(FinalPosition),
+    HeadingMean=wranglecircular(HeadingMean),
+    StartHeading=wranglecircular(StartHeading),
+    StartPosition=wranglecircular(StartLocation),
+    FinalPosition.Pan=wranglecircular(FinalPosition.Pan)
+    
+    )
+   
+```
+
+
+
+# Nonparametric Bootstrapping Analysis
+
+```{r}
+
+## Select only the data we want for each GS
+df.GS1=GSall.alltrials |> filter(Weather=="Sunny", Smoky=="Not Smoky", GS==1,Time<18)
+df.GS5=GSall.alltrials |> filter(Weather=="Sunny", Smoky=="Not Smoky", GS==5,Time<18)
+df.GS10=GSall.alltrials |> filter(Weather=="Sunny", Smoky=="Not Smoky", GS==10,Time<18)
+
+#Create empty data frames to store the resampled data
+GS1.5=data.frame(Velocity=c(),Sinuosity=c(),HeadingMean=c(),Latency=c(),rho_MeanHeading=c(),rho_FinalPosition=c(),rho_StartHeading=c(),
+                 Time=c(),StartHeading=c(),FinalPosition=c(),StartPosition=c(),rho_StartPosition=c(),
+                 Dist_Actual=c(),Dist_StrtLine=c(),
+                 Dist_Diff=c()
+                 )
+GS1.10=data.frame(Velocity=c(),Sinuosity=c(),HeadingMean=c(),Latency=c(),rho_MeanHeading=c(),rho_FinalPosition=c(),rho_StartHeading=c(),
+                  Time=c(),StartHeading=c(),FinalPosition=c(),StartPosition=c(),rho_StartPosition=c(),
+                  Dist_Actual=c(),Dist_StrtLine=c(), Dist_Diff=c()
+)
+
+#For loop to run the re-sampling
+for (i in 1:10000)
+{
+  GS1.5.tmp = df.GS5 |> group_by(Trial) |> sample_n(1) |> ungroup() 
+  GS1.10.tmp = df.GS10 |> group_by(Trial) |> sample_n(1) |> ungroup() 
+  
+  GS1.5=rbind(GS1.5,data.frame(Velocity=mean(GS1.5.tmp$Velocity),
+                               Sinuosity=mean(GS1.5.tmp$Sinuosity),
+                               HeadingMean=mean(GS1.5.tmp$HeadingMean),
+                               Latency=mean(GS1.5.tmp$Latency),
+                               rho_MeanHeading = rho.circular(GS1.5.tmp$HeadingMean),
+                               rho_FinalPosition = rho.circular(GS1.5.tmp$FinalPosition),
+                               rho_StartHeading = rho.circular(GS1.5.tmp$StartHeading),
+                               Time = mean(GS1.5.tmp$Time),
+                               StartHeading=mean.circular(GS1.5.tmp$StartHeading),
+                               FinalPosition=mean.circular(GS1.5.tmp$FinalPosition),
+                               StartPosition=mean.circular(GS1.5.tmp$StartPosition),
+                               rho_StartPosition=rho.circular(GS1.5.tmp$StartPosition),
+                               Dist_Actual=mean(GS1.5.tmp$Dist_Actual),
+                               Dist_StrtLine=mean(GS1.5.tmp$Dist_StrtLine),
+                               Dist_Diff=mean(GS1.5.tmp$Dist_Diff)
+                               ))
+  
+   GS1.10=rbind(GS1.10,data.frame(Velocity=mean(GS1.10.tmp$Velocity),
+                               Sinuosity=mean(GS1.10.tmp$Sinuosity),
+                               HeadingMean=mean(GS1.10.tmp$HeadingMean),
+                               Latency=mean(GS1.10.tmp$Latency),
+                               rho_MeanHeading = rho.circular(GS1.10.tmp$HeadingMean),
+                               rho_FinalPosition = rho.circular(GS1.10.tmp$FinalPosition),
+                               rho_StartHeading = rho.circular(GS1.10.tmp$StartHeading),
+                               Time = mean(GS1.10.tmp$Time),
+                               StartHeading=mean.circular(GS1.10.tmp$StartHeading),
+                               FinalPosition=mean.circular(GS1.10.tmp$FinalPosition),
+                               StartPosition=mean.circular(GS1.10.tmp$StartPosition),
+                               rho_StartPosition=rho.circular(GS1.10.tmp$StartPosition),
+                               Dist_Actual=mean(GS1.10.tmp$Dist_Actual),
+                               Dist_StrtLine=mean(GS1.10.tmp$Dist_StrtLine),
+                               Dist_Diff=mean(GS1.10.tmp$Dist_Diff)
+   ))
+  }
+
+#Calculating the mean values for GS1
+df.GS1.mean=df.GS1 |>
+  summarise(Velocity=mean(Velocity), Sinuosity=mean(Sinuosity), 
+            Latency=mean(Latency), 
+            rho_MeanHeading=rho.circular(HeadingMean),
+            rho_FinalPosition=rho.circular(FinalPosition),
+            rho_StartHeading=rho.circular(StartHeading),
+            rho_StartPosition=rho.circular(StartPosition),
+            Time=mean(Time),
+            HeadingMean=mean(HeadingMean),
+            StartHeading=mean.circular(StartHeading),
+            FinalPosition=mean.circular(FinalPosition),
+            StartPosition=mean.circular(StartPosition),
+            Dist_Actual=mean(Dist_Actual),Dist_StrtLine=mean(Dist_StrtLine),
+            Dist_Diff=mean(Dist_Diff))
+
+
+#write to csv
+write_csv(x = GS1.5, "Bootstrapped Underlying Dist for GS5.csv")
+write_csv(x=GS1.10,"Bootstrapped Underlying Dist for GS10.csv")
+write.csv(x=df.GS1.mean, "Averaged GS1 Values.csv")
+```
+
